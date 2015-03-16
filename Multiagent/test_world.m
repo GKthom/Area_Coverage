@@ -1,0 +1,208 @@
+clear all
+close all
+clc
+%test platform and world for testing control strategies
+%Task: To move around a space-obstacle avoidance. Additional Tasks: Find an
+%object, Cover the whole space, etc.,Change the environment dynamically and
+%it should still behave as required
+%%%%%%%%%%%%%%%%%%%%%%%%
+%Parameters
+%%%%%%%%%%%%%%%%%%%%%%%%
+n_agents=4;
+xy=50;%change grid size
+N=50;%xy*xy-4*xy+4;%number of steps
+agent_pos_log=[];
+action_seq={};
+sensor_accuracy=98;%ranges from 0-100. Higher the better
+sensor_accuracy=100-sensor_accuracy;
+obstacle_cost=100;
+freespace_cost=-5;
+violations=0;
+visited_pts={};
+gamma=0.9;%Discount factor
+update_fraction=0.24;%24;%this fraction of the obstacle cost will be added with each revisit to a state
+exploration_reward=-0.5;%5.910;
+exp_freq=0.99;%exploration frequency
+%Create random world
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+world=rand(xy,xy);
+world=obstacle_cost*round(world);
+s=size(world);
+%%%%%%Change the cost for free spaces to freespace_cost (viz non zero) instead of 0. This
+%%%%%%is done so that the prob matrix in the sight() function does not
+%%%%%%multiply with 0. If it does, then information on the quality of that
+%%%%%%state is lost
+for i=1:s(1)
+    for j=1:s(2)
+        if world(i,j)==0
+            world(i,j)=freespace_cost;
+        end
+    end
+end
+%%%%%%%%%%%To reduce the number of obstacles%%%%%%
+for i=1:20*xy
+    world(randi(xy*xy))=freespace_cost;
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+for i=1:round(xy/2)
+world(randi(xy*xy))=-6*obstacle_cost;%freespace_cost
+end
+%%%%%%%%%%Uncomment to simulate room-like%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%environment%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+world(:,:)=freespace_cost;%To remove all obstacles except wall
+world(2:round((xy/2)-0.2*xy),round(xy/2))=obstacle_cost;
+world(round(xy/2),2:round((xy/2)-0.2*xy))=obstacle_cost;
+world(round((xy/2)+0.2*xy):end,round(xy/2))=obstacle_cost;
+world(round((xy/2)),round((xy/2)+0.2*xy):end)=obstacle_cost;
+% world(round(xy/2),2:round((xy/2)-0.2*xy))=obstacle_cost;
+% % world(round(xy/2),2:8)=obstacle_cost;
+% % world(2*round(xy/2),2:8)=obstacle_cost;
+% % world(round(xy/2):round(xy/2)+5,2)=obstacle_cost;
+% % world(2*round(xy/2):2*round(xy/2)+5,8)=obstacle_cost;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+world(1,:)=obstacle_cost;
+world(:,1)=obstacle_cost;
+world(end,:)=obstacle_cost;
+world(:,end)=obstacle_cost;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+orig_world=world;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Initial position
+% agent_pos=[0,0]+[randi(round(xy/2)),randi(round(xy/2))];
+for i=1:n_agents
+    ag_pos{i}=[round(xy/2)+i-1+20 round(xy/2)+20];
+if ag_pos{i}(1)>xy-1
+    ag_pos{i}(1)=xy-1;%max value is 9
+end
+
+if ag_pos{i}(2)>xy-1
+    ag_pos{i}(2)=xy-1;%max value is 9
+end 
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Agent's Intelligence%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Its action (and hence position update) is decided based on the cost function for each type of space  
+
+%%%%%%%%%%%%Space classification-TO BE DONE%%%%%%%%%%%%%%%%%
+%%%%%Initialize the number of types of spaces as some random number, say 3.
+%%%%%Then find the actual number of types by seeing mahalanobis distance?
+%Position Update
+%Plot world%
+axis([0 xy -xy 0]);
+world_size=size(orig_world);
+for i=1:world_size(1)
+    for j=1:world_size(2)
+        if world(i,j)>0
+            h=scatter(j,-i,'k','filled');
+            set(h, 'Marker', 'square')
+            set(h, 'SizeData', 100)
+            hold on
+        elseif world(i,j)<-5
+            h=scatter(j,-i,'g','filled');
+            set(h, 'Marker', 'square')
+            set(h, 'SizeData', 100)
+            hold on
+        end
+        
+    end
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Agent Sight-Whatever is seen to the agent-Assumes that the agent can see
+%all around it, but it sees clearer when the object is closer. More chance
+%of making mistakes when the object is further away
+% agent_sight=zeros(size(world));
+agent_sight=zeros(3,3);
+prob=agent_sight;
+%agent_sight=[];
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+for k=1:N
+for ii=1:n_agents
+[agent_sight,prob]=sight(ag_pos{ii},world,sensor_accuracy,obstacle_cost,freespace_cost,visited_pts,agent_sight,agent_pos_log,xy,prob);
+%%%%%%%%%%%%%%%%%%%%%log visited positions and probabilities so far%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+for i=1:9
+    moved_pos=agent_motion(ag_pos{ii},i,xy,world);
+    visited_pts{k,i}=[moved_pos(1) moved_pos(2) prob(moved_pos(1),moved_pos(2))];
+end
+agent_pos_log=[agent_pos_log;ag_pos{ii}];
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+[ag_pos{ii},reward,fin_reward,world,action,agent_sight]=pos_update(ii,agent_sight,ag_pos,world,xy,obstacle_cost,gamma,update_fraction,agent_pos_log,exploration_reward,exp_freq);
+
+%%%%%%%%%%%%%Calculate instances of violations. Violations are instances of going into a state of very high costs %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+if agent_sight(ag_pos{ii}(1),ag_pos{ii}(2))>=obstacle_cost
+    violations=violations+1;
+end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%log actions%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+action_seq{k}=action;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%Update plot%%%%%%%%%%%%%%%%%5
+apl_siz=size(agent_pos_log);
+if apl_siz(1)>1
+prev_pos=agent_pos_log(end-1,:);
+else prev_pos=ag_pos{ii};
+end
+%%Plot revisited states as red if they have been revisited many times such that the cost of that state has exceeded the obstacle cost (or some fraction of it)%%%%%%%%%%%%%
+if agent_sight(prev_pos(1),prev_pos(2))>0.6*obstacle_cost%&&world(prev_pos(1),prev_pos(2))<10*obstacle_cost
+    h=scatter(prev_pos(2),-prev_pos(1),'m','filled');
+    set(h, 'Marker', 'square')
+    set(h, 'SizeData', 80)
+    hold on 
+end        
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+hold on
+if ii==1
+h=scatter(ag_pos{ii}(2),-ag_pos{ii}(1),'b','filled');
+set(h, 'SizeData', 30)
+elseif ii==2
+    h=scatter(ag_pos{ii}(2),-ag_pos{ii}(1),'g','filled');
+    set(h, 'SizeData', 30)
+elseif ii==3
+    h=scatter(ag_pos{ii}(2),-ag_pos{ii}(1),'r','filled');
+    set(h, 'SizeData', 30)
+elseif ii==4
+    h=scatter(ag_pos{ii}(2),-ag_pos{ii}(1),'c','filled');
+    set(h, 'SizeData', 30)
+elseif ii==5
+    h=scatter(ag_pos{ii}(2),-ag_pos{ii}(1),'k','filled');
+    set(h, 'SizeData', 30)
+end
+pause(.005)
+
+% pause
+end
+k
+end
+violations 
+unique_pts=unique(agent_pos_log,'rows');
+block_frac=(length(find(orig_world>=0))/xy/xy)
+area_covered_metric=(length(unique_pts)/xy/xy)/(1-block_frac)
+percentage_area=length(unique_pts)/xy/xy
+
+%%%%%%%%%%%%%%%%%%%%%%%Sectioning the space%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+section_div=2;
+section_size=xy/section_div;
+s=size(unique_pts);
+for i=1:length(unique_pts)
+    u_p=unique_pts(i,:);
+    y_start=1;
+    for j=1:section_div*section_size
+        if u_p(2)>=y_start&&u_p(2)<y_start+section_div
+            x_start=1;
+                for l=1:section_div*section_size
+                    if u_p(1)>=x_start&&u_p(1)<x_start+section_div;
+                        section_log(i,:)=[l j];
+                    end
+                    x_start=x_start+section_div;
+                end
+        end
+        y_start=y_start+section_div;
+    end
+end
+
+num_sec=length(unique(section_log,'rows'));
+tot_sec=section_size^2;
+section_coverage=num_sec/tot_sec
